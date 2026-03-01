@@ -127,57 +127,74 @@ public class WeChatBasePlugin implements IAppPlugin, IMockCurrentUser {
         //Xposed not hooked yet!
     }
 
+    private boolean isPaymentActivity(String activityClzName) {
+        return activityClzName.contains(".WalletPayUI")
+                || activityClzName.contains(".UIPageFragmentActivity")
+                || activityClzName.contains(".AppBrandUI") /** mini-program 8.0.67+ */
+                || activityClzName.contains(".AppBrandPluginUI") /** mini-program plugin 8.0.67+ */
+                || activityClzName.contains(".WalletPayCustomUI"); /** custom payment 8.0.67+ */
+    }
+
+    private boolean isSettingsActivity(String activityClzName) {
+        return activityClzName.contains("com.tencent.mm.plugin.setting.ui.setting.SettingsUI")
+                || activityClzName.contains("com.tencent.mm.plugin.wallet.pwd.ui.WalletPasswordSettingUI")
+                || activityClzName.contains("com.tencent.mm.ui.vas.VASCommonActivity") /** 8.0.18 */
+                || activityClzName.contains("com.tencent.mm.plugin.setting.ui.setting_new.MainSettingsUI") /** 8.0.67+ */
+                || activityClzName.contains("com.tencent.mm.plugin.setting.ui.setting_new.CommonSettingsUI"); /** 8.0.67+ */
+    }
+
     @Override
     public void onActivityResumed(Activity activity) {
         L.d("Activity onResume =", activity);
         final String activityClzName = activity.getClass().getName();
-        if (activityClzName.contains("com.tencent.mm.plugin.setting.ui.setting.SettingsUI")
-                || activityClzName.contains("com.tencent.mm.plugin.wallet.pwd.ui.WalletPasswordSettingUI")
-                || activityClzName.contains("com.tencent.mm.ui.vas.VASCommonActivity") /** 8.0.18 */) {
+        if (isSettingsActivity(activityClzName)) {
             Task.onMain(100, () -> doSettingsMenuInject(activity));
         } else if (getVersionCode(activity) >= Constant.WeChat.WECHAT_VERSION_CODE_8_0_20 && activityClzName.contains("com.tencent.mm.ui.LauncherUI")) {
             startFragmentObserver(activity);
-        } else if (activityClzName.contains(".WalletPayUI")
-                || activityClzName.contains(".UIPageFragmentActivity")) {
-            ActivityViewObserver activityViewObserver = new ActivityViewObserver(activity);
-            activityViewObserver.setViewIdentifyType(".EditHintPasswdView");
-            ActivityViewObserverHolder.start(ActivityViewObserverHolder.Key.WeChatPayView,  activityViewObserver,
-                    100, new ActivityViewObserver.IActivityViewListener() {
-                @Override
-                public void onViewFounded(ActivityViewObserver observer, View view) {
-                    ActivityViewObserver.IActivityViewListener l = this;
-                    ActivityViewObserverHolder.stop(observer);
-                    L.d("onViewFounded:", view, " rootView: ", view.getRootView());
-                    ViewGroup rootView = (ViewGroup) view.getRootView();
-                    view.post(() -> onPayDialogShown(activity, rootView));
-
-                    View.OnAttachStateChangeListener listener = mView2OnAttachStateChangeListenerMap.get(view);
-                    if (listener != null) {
-                        view.removeOnAttachStateChangeListener(listener);
-                    }
-                    listener = new View.OnAttachStateChangeListener() {
-                        @Override
-                        public void onViewAttachedToWindow(View v) {
-                            L.d("onViewAttachedToWindow:", view);
-
-                        }
-
-                        @Override
-                        public void onViewDetachedFromWindow(View v) {
-                            L.d("onViewDetachedFromWindow:", view);
-                            Context context = v.getContext();
-                            onPayDialogDismiss(context, rootView);
-                            if (Config.from(context).isVolumeDownMonitorEnabled()) {
-                                ViewUtils.unregisterVolumeKeyDownEventListener(activity.getWindow());
-                            }
-                            Task.onMain(500, () -> observer.start(100, l));
-                        }
-                    };
-                    view.addOnAttachStateChangeListener(listener);
-                    mView2OnAttachStateChangeListenerMap.put(view, listener);
-                }
-            });
+        } else if (isPaymentActivity(activityClzName)) {
+            startPaymentObserver(activity);
         }
+    }
+
+    private void startPaymentObserver(Activity activity) {
+        ActivityViewObserver activityViewObserver = new ActivityViewObserver(activity);
+        activityViewObserver.setViewIdentifyType(".EditHintPasswdView");
+        ActivityViewObserverHolder.start(ActivityViewObserverHolder.Key.WeChatPayView,  activityViewObserver,
+                100, new ActivityViewObserver.IActivityViewListener() {
+            @Override
+            public void onViewFounded(ActivityViewObserver observer, View view) {
+                ActivityViewObserver.IActivityViewListener l = this;
+                ActivityViewObserverHolder.stop(observer);
+                L.d("onViewFounded:", view, " rootView: ", view.getRootView());
+                ViewGroup rootView = (ViewGroup) view.getRootView();
+                view.post(() -> onPayDialogShown(activity, rootView));
+
+                View.OnAttachStateChangeListener listener = mView2OnAttachStateChangeListenerMap.get(view);
+                if (listener != null) {
+                    view.removeOnAttachStateChangeListener(listener);
+                }
+                listener = new View.OnAttachStateChangeListener() {
+                    @Override
+                    public void onViewAttachedToWindow(View v) {
+                        L.d("onViewAttachedToWindow:", view);
+
+                    }
+
+                    @Override
+                    public void onViewDetachedFromWindow(View v) {
+                        L.d("onViewDetachedFromWindow:", view);
+                        Context context = v.getContext();
+                        onPayDialogDismiss(context, rootView);
+                        if (Config.from(context).isVolumeDownMonitorEnabled()) {
+                            ViewUtils.unregisterVolumeKeyDownEventListener(activity.getWindow());
+                        }
+                        Task.onMain(500, () -> observer.start(100, l));
+                    }
+                };
+                view.addOnAttachStateChangeListener(listener);
+                mView2OnAttachStateChangeListenerMap.put(view, listener);
+            }
+        });
     }
 
     @Override
@@ -190,8 +207,7 @@ public class WeChatBasePlugin implements IAppPlugin, IMockCurrentUser {
         try {
             L.d("Activity onPause =", activity);
             final String activityClzName = activity.getClass().getName();
-            if (activityClzName.contains(".WalletPayUI")
-                || activityClzName.contains(".UIPageFragmentActivity")) {
+            if (isPaymentActivity(activityClzName)) {
                 ActivityViewObserverHolder.stop(ActivityViewObserverHolder.Key.WeChatPayView);
                 ActivityViewObserverHolder.stop(ActivityViewObserverHolder.Key.WeChatPaymentMethodView);
                 onPayDialogDismiss(activity, activity.getWindow().getDecorView());
@@ -545,7 +561,22 @@ public class WeChatBasePlugin implements IAppPlugin, IMockCurrentUser {
 
     protected void doSettingsMenuInject(Context context, View targetView, String targetClassName) {
         int versionCode = getVersionCode(context);
+
+        // 8.0.67+ 新版设置页面使用 RecyclerView，不再有 android:list ListView
+        if (versionCode >= Constant.WeChat.WECHAT_VERSION_CODE_8_0_67
+                && (targetClassName.contains("setting_new.MainSettingsUI")
+                    || targetClassName.contains("setting_new.CommonSettingsUI"))) {
+            doSettingsMenuInjectNewUI(context, targetView);
+            return;
+        }
+
         ListView itemView = (ListView) ViewUtils.findViewByName(targetView, "android", "list");
+        if (itemView == null) {
+            // Fallback: 尝试新版 UI 注入（可能通过 VASCommonActivity 跳转到了新版设置）
+            L.d("ListView not found, trying new UI injection");
+            doSettingsMenuInjectNewUI(context, targetView);
+            return;
+        }
         if (ViewUtils.findViewByText(itemView, Lang.getString(R.id.app_settings_name)) != null
                 || isHeaderViewExistsFallback(itemView)) {
             return;
@@ -645,5 +676,160 @@ public class WeChatBasePlugin implements IAppPlugin, IMockCurrentUser {
         settingsItemRootLLayout.setTag(BuildConfig.APPLICATION_ID);
 
         itemView.addHeaderView(settingsItemRootLLayout);
+    }
+
+    /**
+     * 8.0.67+ 新版设置页面注入
+     * 新版设置使用 MVVM 框架 + RecyclerView，不再有 android:list ListView
+     * 方案：找到 RecyclerView 的父容器，在 RecyclerView 上方插入设置入口
+     */
+    protected void doSettingsMenuInjectNewUI(Context context, View targetView) {
+        // 检查是否已经注入
+        View existingView = targetView.findViewWithTag(BuildConfig.APPLICATION_ID);
+        if (existingView != null) {
+            return;
+        }
+
+        // 在新版设置页面中查找 RecyclerView 或主要的滚动容器
+        List<View> recyclerViews = new ArrayList<>();
+        if (targetView instanceof ViewGroup) {
+            findRecyclerViews((ViewGroup) targetView, recyclerViews);
+        }
+
+        if (recyclerViews.isEmpty()) {
+            L.d("No RecyclerView found in new settings UI");
+            return;
+        }
+
+        // 使用第一个可见的 RecyclerView
+        View recyclerView = null;
+        for (View rv : recyclerViews) {
+            if (ViewUtils.isShown(rv)) {
+                recyclerView = rv;
+                break;
+            }
+        }
+        if (recyclerView == null) {
+            recyclerView = recyclerViews.get(0);
+        }
+
+        ViewGroup parentView = (ViewGroup) recyclerView.getParent();
+        if (parentView == null) {
+            L.d("RecyclerView parent is null");
+            return;
+        }
+
+        boolean isDarkMode = StyleUtils.isDarkMode(context);
+        int defHPadding = DpUtils.dip2px(context, 15);
+
+        // 创建设置入口视图
+        LinearLayout settingsItemRootLayout = new LinearLayout(context);
+        settingsItemRootLayout.setOrientation(LinearLayout.VERTICAL);
+        settingsItemRootLayout.setLayoutParams(new ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        settingsItemRootLayout.setTag(BuildConfig.APPLICATION_ID);
+
+        LinearLayout itemHlinearLayout = new LinearLayout(context);
+        itemHlinearLayout.setOrientation(LinearLayout.HORIZONTAL);
+        itemHlinearLayout.setWeightSum(1);
+        itemHlinearLayout.setBackground(new XDrawable.Builder()
+                .defaultColor(isDarkMode ? 0xFF191919 : Color.WHITE)
+                .pressedColor(isDarkMode ? 0xFF1D1D1D : 0xFFE5E5E5)
+                .create());
+        itemHlinearLayout.setGravity(Gravity.CENTER_VERTICAL);
+        itemHlinearLayout.setClickable(true);
+        itemHlinearLayout.setOnClickListener(view -> new SettingsView(context).showInDialog());
+
+        TextView itemNameText = new TextView(context);
+        itemNameText.setTextColor(isDarkMode ? 0xFFD3D3D3 : 0xFF353535);
+        itemNameText.setText(Lang.getString(R.id.app_settings_name));
+        itemNameText.setGravity(Gravity.CENTER_VERTICAL);
+        itemNameText.setPadding(DpUtils.dip2px(context, 16), 0, 0, 0);
+        itemNameText.setTextSize(TypedValue.COMPLEX_UNIT_DIP, StyleUtils.TEXT_SIZE_BIG);
+
+        TextView itemSummerText = new TextView(context);
+        StyleUtils.apply(itemSummerText);
+        itemSummerText.setText(BuildConfig.VERSION_NAME);
+        itemSummerText.setGravity(Gravity.CENTER_VERTICAL);
+        itemSummerText.setPadding(0, 0, defHPadding, 0);
+        itemSummerText.setTextColor(isDarkMode ? 0xFF656565 : 0xFF999999);
+
+        // 尝试匹配微信设置项样式
+        try {
+            View styleRefView = ViewUtils.findViewByText(targetView,
+                    "通用", "一般", "General", "帮助与反馈", "幫助與意見回饋", "Help & Feedback",
+                    "关于微信", "關於微信", "About WeChat",
+                    "消息通知", "訊息通知", "Notifications");
+            L.d("styleRefView for new UI", styleRefView);
+            if (styleRefView instanceof TextView) {
+                TextView refTextView = (TextView) styleRefView;
+                float scale = itemNameText.getTextSize() / refTextView.getTextSize();
+                itemNameText.setTextSize(TypedValue.COMPLEX_UNIT_PX, refTextView.getTextSize());
+                itemSummerText.setTextSize(TypedValue.COMPLEX_UNIT_PX, itemSummerText.getTextSize() / scale);
+                itemNameText.setTextColor(refTextView.getCurrentTextColor());
+
+                // 尝试复制设置项的背景
+                try {
+                    View refItemView = (View) refTextView.getParent();
+                    // 向上查找带有背景的父视图
+                    for (int i = 0; i < 5 && refItemView != null; i++) {
+                        Drawable bg = refItemView.getBackground();
+                        if (bg != null) {
+                            Drawable.ConstantState cs = bg.getConstantState();
+                            if (cs != null) {
+                                itemHlinearLayout.setBackground(cs.newDrawable());
+                                break;
+                            }
+                        }
+                        if (refItemView.getParent() instanceof View) {
+                            refItemView = (View) refItemView.getParent();
+                        } else {
+                            break;
+                        }
+                    }
+                } catch (Exception e) {
+                    L.e(e);
+                }
+            }
+        } catch (Exception e) {
+            L.e(e);
+        }
+
+        itemHlinearLayout.addView(itemNameText, new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.MATCH_PARENT, 1));
+        itemHlinearLayout.addView(itemSummerText, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
+        View lineView = new View(context);
+        lineView.setBackgroundColor(isDarkMode ? 0xFF2E2E2E : 0xFFD5D5D5);
+
+        settingsItemRootLayout.addView(lineView, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 1));
+        settingsItemRootLayout.addView(itemHlinearLayout, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, DpUtils.dip2px(context, 55)));
+
+        // 在 RecyclerView 上方插入设置入口
+        int recyclerViewIndex = ViewUtils.findChildViewPosition(parentView, recyclerView);
+        if (recyclerViewIndex >= 0) {
+            parentView.addView(settingsItemRootLayout, recyclerViewIndex);
+        } else {
+            parentView.addView(settingsItemRootLayout, 0);
+        }
+        L.d("Settings entry injected into new UI successfully");
+    }
+
+    private void findRecyclerViews(ViewGroup parent, List<View> outList) {
+        for (int i = 0; i < parent.getChildCount(); i++) {
+            View child = parent.getChildAt(i);
+            if (child == null) continue;
+            String className = child.getClass().getName();
+            // 匹配 RecyclerView 及其各种变体
+            if (className.contains("RecyclerView") || className.contains("recyclerview")) {
+                outList.add(child);
+            }
+            if (child instanceof ViewGroup) {
+                findRecyclerViews((ViewGroup) child, outList);
+            }
+        }
     }
 }
