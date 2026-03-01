@@ -148,12 +148,25 @@ public class WeChatBasePlugin implements IAppPlugin, IMockCurrentUser {
         L.d("Activity onResume =", activity);
         final String activityClzName = activity.getClass().getName();
         if (isSettingsActivity(activityClzName)) {
-            Task.onMain(100, () -> doSettingsMenuInject(activity));
-        } else if (getVersionCode(activity) >= Constant.WeChat.WECHAT_VERSION_CODE_8_0_20 && activityClzName.contains("com.tencent.mm.ui.LauncherUI")) {
-            startFragmentObserver(activity);
-        } else if (isPaymentActivity(activityClzName)) {
-            startPaymentObserver(activity);
+            doSettingsMenuInjectWithRetry(activity, 0);
         }
+        if (getVersionCode(activity) >= Constant.WeChat.WECHAT_VERSION_CODE_8_0_20 && activityClzName.contains("com.tencent.mm.ui.LauncherUI")) {
+            startFragmentObserver(activity);
+        }
+        // 对所有 Activity 启动支付观察器，以便捕获小程序通过 IPC 触发的支付弹窗
+        startPaymentObserver(activity);
+    }
+
+    private void doSettingsMenuInjectWithRetry(Activity activity, int retryCount) {
+        Task.onMain(retryCount == 0 ? 200 : 500, () -> {
+            if (activity.isFinishing() || activity.isDestroyed()) return;
+            doSettingsMenuInject(activity);
+            // 如果注入未成功（未找到合适的视图），最多重试 5 次
+            View injected = activity.getWindow().getDecorView().findViewWithTag(BuildConfig.APPLICATION_ID);
+            if (injected == null && retryCount < 5) {
+                doSettingsMenuInjectWithRetry(activity, retryCount + 1);
+            }
+        });
     }
 
     private void startPaymentObserver(Activity activity) {
@@ -207,11 +220,15 @@ public class WeChatBasePlugin implements IAppPlugin, IMockCurrentUser {
         try {
             L.d("Activity onPause =", activity);
             final String activityClzName = activity.getClass().getName();
-            if (isPaymentActivity(activityClzName)) {
+            // 仅在明确的支付 Activity 暂停时停止观察器和清理
+            if (activityClzName.contains(".WalletPayUI")
+                    || activityClzName.contains(".UIPageFragmentActivity")
+                    || activityClzName.contains(".WalletPayCustomUI")) {
                 ActivityViewObserverHolder.stop(ActivityViewObserverHolder.Key.WeChatPayView);
                 ActivityViewObserverHolder.stop(ActivityViewObserverHolder.Key.WeChatPaymentMethodView);
                 onPayDialogDismiss(activity, activity.getWindow().getDecorView());
-            } else if (getVersionCode(activity) >= Constant.WeChat.WECHAT_VERSION_CODE_8_0_20 && activityClzName.contains("com.tencent.mm.ui.LauncherUI")) {
+            }
+            if (getVersionCode(activity) >= Constant.WeChat.WECHAT_VERSION_CODE_8_0_20 && activityClzName.contains("com.tencent.mm.ui.LauncherUI")) {
                 stopFragmentObserver(activity);
             }
         } catch (Exception e) {
@@ -822,14 +839,25 @@ public class WeChatBasePlugin implements IAppPlugin, IMockCurrentUser {
         for (int i = 0; i < parent.getChildCount(); i++) {
             View child = parent.getChildAt(i);
             if (child == null) continue;
-            String className = child.getClass().getName();
-            // 匹配 RecyclerView 及其各种变体
-            if (className.contains("RecyclerView") || className.contains("recyclerview")) {
+            // 检查类名及所有父类名，覆盖微信自定义 RecyclerView 子类
+            if (isRecyclerView(child)) {
                 outList.add(child);
             }
             if (child instanceof ViewGroup) {
                 findRecyclerViews((ViewGroup) child, outList);
             }
         }
+    }
+
+    private boolean isRecyclerView(View view) {
+        Class<?> clazz = view.getClass();
+        while (clazz != null && clazz != View.class && clazz != Object.class) {
+            String name = clazz.getName();
+            if (name.contains("RecyclerView") || name.contains("recyclerview")) {
+                return true;
+            }
+            clazz = clazz.getSuperclass();
+        }
+        return false;
     }
 }
