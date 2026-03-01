@@ -122,7 +122,8 @@ void fingerprintPre(JNIEnv *env, jstring *appDataDir, jstring *niceName) {
         sHookEnable = equals(sNiceName, "com.tencent.mobileqq")
             || equals(sNiceName, "com.tencent.mobileqq:tool");
     } else if (strstr(MODULE_NAME, "wechat")) {
-        sHookEnable = equals(sNiceName, "com.tencent.mm");
+        sHookEnable = equals(sNiceName, "com.tencent.mm")
+            || (sNiceName != NULL && strncmp(sNiceName, "com.tencent.mm:appbrand", 23) == 0);
     } else if (strstr(MODULE_NAME, "alipay")) {
         sHookEnable = equals(sNiceName, "com.eg.android.AlipayGphone");
     } else if (strstr(MODULE_NAME, "taobao")) {
