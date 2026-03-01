@@ -35,10 +35,11 @@ jobs:
         with:
           base64-encoded-secret: ${{ secrets.SIGNING_STORE_BASE64 }}
           filename: "app/keystore.jks"
-      - uses: AdoptOpenJDK/install-jdk@v1
+      - uses: actions/setup-java@v4
         with:
-          version: '17'
-          architecture: x64
+          java-version: '17'
+          distribution: 'temurin'
+          cache: gradle
       - name: Build Riru modules
         run: cd ./module && bash ./make.sh
         env:
