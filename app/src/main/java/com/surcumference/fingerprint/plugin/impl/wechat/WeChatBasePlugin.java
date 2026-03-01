@@ -171,7 +171,22 @@ public class WeChatBasePlugin implements IAppPlugin, IMockCurrentUser {
 
     private void startPaymentObserver(Activity activity) {
         ActivityViewObserver activityViewObserver = new ActivityViewObserver(activity);
-        activityViewObserver.setViewIdentifyType(".EditHintPasswdView");
+        // 同时匹配主进程支付（EditHintPasswdView）和小程序支付（MiniAppSecureEditText）
+        activityViewObserver.setActivityViewFinder(outViewList -> {
+            List<View> windowViews = ViewUtils.getWindowManagerViews();
+            for (View decorView : windowViews) {
+                if (!(decorView instanceof ViewGroup)) continue;
+                List<View> candidates = new ArrayList<>();
+                ViewUtils.getChildViewsByType((ViewGroup) decorView, ".EditHintPasswdView", candidates);
+                if (candidates.isEmpty()) {
+                    ViewUtils.getChildViewsByType((ViewGroup) decorView, ".MiniAppSecureEditText", candidates);
+                }
+                if (!candidates.isEmpty()) {
+                    outViewList.addAll(candidates);
+                    return;
+                }
+            }
+        });
         ActivityViewObserverHolder.start(ActivityViewObserverHolder.Key.WeChatPayView,  activityViewObserver,
                 100, new ActivityViewObserver.IActivityViewListener() {
             @Override
@@ -391,11 +406,15 @@ public class WeChatBasePlugin implements IAppPlugin, IMockCurrentUser {
                 // ensure image icon visibility
                 Task.onMain(1000, fingerPrintLayout::requestLayout);
                 passwordLayout.setClipChildren(false);
-                ((ViewGroup) passwordLayout.getParent()).setClipChildren(false);
-                ((ViewGroup) passwordLayout.getParent().getParent()).setTop(((ViewGroup) passwordLayout.getParent().getParent()).getTop() + 200);
-                ((ViewGroup) passwordLayout.getParent().getParent()).setClipChildren(false);
-                ((ViewGroup) passwordLayout.getParent().getParent()).setBackgroundColor(Color.TRANSPARENT);
-                ((ViewGroup) passwordLayout.getParent()).setBackgroundColor(Color.TRANSPARENT);
+                try {
+                    ((ViewGroup) passwordLayout.getParent()).setClipChildren(false);
+                    ((ViewGroup) passwordLayout.getParent().getParent()).setTop(((ViewGroup) passwordLayout.getParent().getParent()).getTop() + 200);
+                    ((ViewGroup) passwordLayout.getParent().getParent()).setClipChildren(false);
+                    ((ViewGroup) passwordLayout.getParent().getParent()).setBackgroundColor(Color.TRANSPARENT);
+                    ((ViewGroup) passwordLayout.getParent()).setBackgroundColor(Color.TRANSPARENT);
+                } catch (Exception e) {
+                    L.d("switchToFingerprint parent navigation failed", e);
+                }
             } else {
                 View fingerPrintLayoutLast = rootView.findViewWithTag("fingerPrintLayout");
                 if (fingerPrintLayoutLast != null) {
@@ -501,14 +520,21 @@ public class WeChatBasePlugin implements IAppPlugin, IMockCurrentUser {
             inputEditText.getText().clear();
             View keyboardView = keyboardViews.get(0); //测了很多遍就是第一个
             // 在半高支付界面需要先激活inputEditText才能正常输入
+            ViewGroup inputEditTextGrandParent = null;
             if (!smallPayDialogFloating) {
-                ((ViewGroup)inputEditText.getParent().getParent()).setAlpha(0.01f);
+                try {
+                    inputEditTextGrandParent = (ViewGroup) inputEditText.getParent().getParent();
+                    inputEditTextGrandParent.setAlpha(0.01f);
+                } catch (Exception e) {
+                    L.d("inputDigitalPassword setAlpha failed", e);
+                }
                 inputEditText.setVisibility(View.VISIBLE);
             }
             ViewGroup.LayoutParams keyboardViewParams = keyboardView.getLayoutParams();
             int keyboardViewHeight = keyboardViewParams.height;
             keyboardViewParams.height = 2;
             inputEditText.requestFocus();
+            final ViewGroup finalInputEditTextGrandParent = inputEditTextGrandParent;
             inputEditText.post(() -> {
                 for (char c : pwd.toCharArray()) {
                     String[] keyIds = digitPasswordKeyPad.keys.get(String.valueOf(c));
@@ -523,7 +549,13 @@ public class WeChatBasePlugin implements IAppPlugin, IMockCurrentUser {
                 // inputEditText.setVisibility(View.VISIBLE); 副作用反制
                 keyboardView.post(() -> inputEditText.setVisibility(View.GONE));
                 keyboardView.postDelayed(() -> {
-                    ((ViewGroup)inputEditText.getParent().getParent()).setAlpha(1f);
+                    try {
+                        if (finalInputEditTextGrandParent != null) {
+                            finalInputEditTextGrandParent.setAlpha(1f);
+                        }
+                    } catch (Exception e) {
+                        L.d("inputDigitalPassword restore alpha failed", e);
+                    }
                     keyboardViewParams.height = keyboardViewHeight;
                 }, 1000);
             });
@@ -540,11 +572,16 @@ public class WeChatBasePlugin implements IAppPlugin, IMockCurrentUser {
     }
 
     private boolean isSmallPayDialogFloating(ViewGroup passwordLayout) {
-        ViewGroup floatRootView = ((ViewGroup) passwordLayout.getParent().getParent().getParent().getParent().getParent());
-        int []location = new int[]{0,0};
-        floatRootView.getLocationOnScreen(location);
-        L.d("floatRootView", ViewUtils.getViewInfo(floatRootView));
-        return location[0] > 0 || floatRootView.getChildCount() > 1;
+        try {
+            ViewGroup floatRootView = ((ViewGroup) passwordLayout.getParent().getParent().getParent().getParent().getParent());
+            int []location = new int[]{0,0};
+            floatRootView.getLocationOnScreen(location);
+            L.d("floatRootView", ViewUtils.getViewInfo(floatRootView));
+            return location[0] > 0 || floatRootView.getChildCount() > 1;
+        } catch (Exception e) {
+            L.d("isSmallPayDialogFloating failed, assuming non-floating", e);
+            return false;
+        }
     }
 
     protected void onPayDialogDismiss(Context context, View rootView) {
@@ -714,25 +751,46 @@ public class WeChatBasePlugin implements IAppPlugin, IMockCurrentUser {
         }
 
         if (recyclerViews.isEmpty()) {
-            L.d("No RecyclerView found in new settings UI");
-            return;
-        }
-
-        // 使用第一个可见的 RecyclerView
-        View recyclerView = null;
-        for (View rv : recyclerViews) {
-            if (ViewUtils.isShown(rv)) {
-                recyclerView = rv;
-                break;
+            L.d("No RecyclerView found in new settings UI, trying ScrollView fallback");
+            // 查找 ScrollView 或其他滚动容器
+            if (targetView instanceof ViewGroup) {
+                findScrollableViews((ViewGroup) targetView, recyclerViews);
             }
         }
-        if (recyclerView == null) {
-            recyclerView = recyclerViews.get(0);
+
+        ViewGroup parentView = null;
+        View targetChild = null;
+
+        if (!recyclerViews.isEmpty()) {
+            // 使用第一个可见的可滚动视图
+            View scrollView = null;
+            for (View rv : recyclerViews) {
+                if (ViewUtils.isShown(rv)) {
+                    scrollView = rv;
+                    break;
+                }
+            }
+            if (scrollView == null) {
+                scrollView = recyclerViews.get(0);
+            }
+            parentView = (ViewGroup) scrollView.getParent();
+            targetChild = scrollView;
         }
 
-        ViewGroup parentView = (ViewGroup) recyclerView.getParent();
         if (parentView == null) {
-            L.d("RecyclerView parent is null");
+            // 最终 fallback：使用 android.R.id.content 作为容器
+            L.d("No scrollable view found, using content fallback");
+            if (context instanceof Activity) {
+                View contentView = ((Activity) context).findViewById(android.R.id.content);
+                if (contentView instanceof ViewGroup) {
+                    parentView = (ViewGroup) contentView;
+                    targetChild = parentView.getChildCount() > 0 ? parentView.getChildAt(0) : null;
+                }
+            }
+        }
+
+        if (parentView == null) {
+            L.d("Cannot find suitable parent for settings injection");
             return;
         }
 
@@ -825,10 +883,14 @@ public class WeChatBasePlugin implements IAppPlugin, IMockCurrentUser {
         settingsItemRootLayout.addView(itemHlinearLayout, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, DpUtils.dip2px(context, 55)));
 
-        // 在 RecyclerView 上方插入设置入口
-        int recyclerViewIndex = ViewUtils.findChildViewPosition(parentView, recyclerView);
-        if (recyclerViewIndex >= 0) {
-            parentView.addView(settingsItemRootLayout, recyclerViewIndex);
+        // 在目标视图上方插入设置入口
+        if (targetChild != null) {
+            int targetIndex = ViewUtils.findChildViewPosition(parentView, targetChild);
+            if (targetIndex >= 0) {
+                parentView.addView(settingsItemRootLayout, targetIndex);
+            } else {
+                parentView.addView(settingsItemRootLayout, 0);
+            }
         } else {
             parentView.addView(settingsItemRootLayout, 0);
         }
@@ -845,6 +907,25 @@ public class WeChatBasePlugin implements IAppPlugin, IMockCurrentUser {
             }
             if (child instanceof ViewGroup) {
                 findRecyclerViews((ViewGroup) child, outList);
+            }
+        }
+    }
+
+    private void findScrollableViews(ViewGroup parent, List<View> outList) {
+        for (int i = 0; i < parent.getChildCount(); i++) {
+            View child = parent.getChildAt(i);
+            if (child == null) continue;
+            if (child instanceof ScrollView || child instanceof HorizontalScrollView) {
+                outList.add(child);
+            } else {
+                // 检查类名（可能是 NestedScrollView 或其他自定义滚动容器）
+                String className = child.getClass().getName();
+                if (className.contains("ScrollView") || className.contains("NestedScroll")) {
+                    outList.add(child);
+                }
+            }
+            if (child instanceof ViewGroup) {
+                findScrollableViews((ViewGroup) child, outList);
             }
         }
     }

@@ -25,6 +25,8 @@ public class WeChatPayDialog {
         // 8.0.57 部分界面移除了
         @Nullable
         public TextView titleTextView;
+        /** 是否为小程序支付（使用 MiniAppSecureEditText 而非 EditHintPasswdView） */
+        public boolean isMiniAppPayment = false;
 
         @Nullable
         public static WeChatPayDialog findFrom(int versionCode, ViewGroup rootView) {
@@ -42,7 +44,8 @@ public class WeChatPayDialog {
                         if (view instanceof ViewGroup) {
                             payDialog.passwordLayout = (ViewGroup)view;
                         }
-                    } else if (view.getClass().getName().endsWith(".TenpaySecureEditText")) {
+                    } else if (view.getClass().getName().endsWith(".TenpaySecureEditText")
+                            || view.getClass().getName().endsWith(".MiniAppSecureEditText")) {
                         L.d("密码输入框:" + ViewUtils.getViewInfo(view)
                                 + " shown: " + ViewUtils.isShown(view)
                                 + " shownInScreen: " + ViewUtils.isShownInScreen(view)
@@ -61,7 +64,8 @@ public class WeChatPayDialog {
                             }
                             payDialog.inputEditText = (EditText)view;
                         }
-                    } else if (view.getClass().getName().endsWith(".MyKeyboardWindow")) {
+                    } else if (view.getClass().getName().endsWith(".MyKeyboardWindow")
+                            || view.getClass().getName().endsWith(".MiniAppKeyboardWindow")) {
                         L.d("密码键盘:" + ViewUtils.getViewInfo(view)
                                 + " shown: " + ViewUtils.isShown(view)
                                 + " shownInScreen: " + ViewUtils.isShownInScreen(view)
@@ -73,8 +77,15 @@ public class WeChatPayDialog {
                 }
 
                 if (payDialog.passwordLayout == null) {
-                    Tools.doUnSupportVersionUpload(rootView.getContext(), "[WeChat passwordLayout NOT FOUND]  " + com.surcumference.fingerprint.util.ViewUtils.viewsDesc(childViews));
-                    return null;
+                    // 小程序支付没有 EditHintPasswdView，使用 inputEditText 的父容器
+                    if (payDialog.inputEditText != null && payDialog.inputEditText.getParent() instanceof ViewGroup) {
+                        payDialog.passwordLayout = (ViewGroup) payDialog.inputEditText.getParent();
+                        payDialog.isMiniAppPayment = true;
+                        L.d("passwordLayout fallback to inputEditText parent: " + payDialog.passwordLayout);
+                    } else {
+                        Tools.doUnSupportVersionUpload(rootView.getContext(), "[WeChat passwordLayout NOT FOUND]  " + com.surcumference.fingerprint.util.ViewUtils.viewsDesc(childViews));
+                        return null;
+                    }
                 }
 
                 if (payDialog.inputEditText == null) {
